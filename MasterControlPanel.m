@@ -8,10 +8,15 @@ function MasterControlPanel()
 %   1. Full Field Flicker      - responsiveness check
 %   2. Full Field Noise         - ON/OFF characterization (seeded Gaussian)
 %   3. Checkerboard Noise       - spatial receptive field mapping
-%   4. Moving Circle            - RF-covering random walk stimulus
+%   4. Jittering Circle          - RF-covering random walk stimulus
 %
 % PREREQUISITE: Stage-VSS server must be running in a separate MATLAB
 %               instance before pressing any RUN button.
+%
+% CLAMPEX INTEGRATION: When 'Record with Clampex' is checked, each RUN
+%   button will automatically start/stop a gap-free recording in Clampex
+%   11.2 via SendKeys (Ctrl+Shift+1 toggle). Clampex must be open and
+%   idle (not already recording) before clicking RUN.
 %
 % All stimulus scripts are from the WorkingStageCodes control set.
 % Each script manages its own StageClient connection internally.
@@ -44,8 +49,38 @@ function MasterControlPanel()
         'BackgroundColor', [0.15 0.15 0.18], ...
         'HorizontalAlignment', 'center');
 
+    % ---- Clampex Recording Controls (persistent across all tabs) ----
+    recordCheck = uicontrol(fig, 'Style', 'checkbox', ...
+        'String', 'Record with Clampex', ...
+        'Value', 0, ...
+        'Position', [20 548 160 22], ...
+        'ForegroundColor', [1 0.6 0.2], ...
+        'BackgroundColor', [0.15 0.15 0.18], ...
+        'FontSize', 10, ...
+        'FontWeight', 'bold');
+
+    buildLabel(fig, 'Pre (s):', 190, 548);
+    preDelayEdit = uicontrol(fig, 'Style', 'edit', ...
+        'String', '2', ...
+        'Position', [260 548 35 22]);
+
+    buildLabel(fig, 'Post (s):', 305, 548);
+    postDelayEdit = uicontrol(fig, 'Style', 'edit', ...
+        'String', '2', ...
+        'Position', [385 548 35 22]);
+
+    buildLabel(fig, 'Trials:', 430, 548);
+    trialsEdit = uicontrol(fig, 'Style', 'edit', ...
+        'String', '1', ...
+        'Position', [490 548 35 22]);
+
+    buildLabel(fig, 'ITI (s):', 535, 548);
+    itiEdit = uicontrol(fig, 'Style', 'edit', ...
+        'String', '3', ...
+        'Position', [605 548 35 22]);
+
     % ---- Tab Group ----
-    tabGroup = uitabgroup(fig, 'Position', [0.01 0.05 0.97 0.88]);
+    tabGroup = uitabgroup(fig, 'Position', [0.01 0.05 0.97 0.84]);
 
     % =====================================================================
     %  TAB 1: Full Field Flicker
@@ -185,6 +220,14 @@ function MasterControlPanel()
         'String', '60', ...
         'Position', [160 230 80 22]);
 
+    autoSave3 = uicontrol(tab3, 'Style', 'checkbox', ...
+        'String', 'Auto-save noise for analysis', ...
+        'Value', 1, ...
+        'Position', [260 230 220 22], ...
+        'ForegroundColor', [0.85 0.85 0.9], ...
+        'BackgroundColor', [0.18 0.18 0.22], ...
+        'FontSize', 10);
+
     uicontrol(tab3, 'Style', 'pushbutton', ...
         'String', 'RUN CHECKERBOARD', ...
         'Position', [20 170 220 40], ...
@@ -204,12 +247,12 @@ function MasterControlPanel()
         'Callback', @(~,~) saveNoiseSeq());
 
     % =====================================================================
-    %  TAB 4: Moving Circle Stimulus
+    %  TAB 4: Jittering Circle Stimulus
     % =====================================================================
-    tab4 = uitab(tabGroup, 'Title', '4. Moving Circle', ...
+    tab4 = uitab(tabGroup, 'Title', '4. Jittering Circle', ...
         'BackgroundColor', [0.18 0.18 0.22]);
 
-    buildSectionLabel(tab4, 'Moving Circle - RF-Covering Random Walk', 10, 475);
+    buildSectionLabel(tab4, 'Jittering Circle - RF-Covering Random Walk', 10, 475);
 
     % ---- LEFT COLUMN: Analysis ----
     buildLabel(tab4, '-- ANALYSIS --', 20, 440);
@@ -306,13 +349,13 @@ function MasterControlPanel()
         'FontSize', 10);
 
     uicontrol(tab4, 'Style', 'pushbutton', ...
-        'String', 'RUN MOVING CIRCLE', ...
+        'String', 'RUN JITTERING CIRCLE', ...
         'Position', [380 165 200 50], ...
         'FontWeight', 'bold', ...
         'FontSize', 12, ...
         'BackgroundColor', [0.2 0.6 0.3], ...
         'ForegroundColor', [1 1 1], ...
-        'Callback', @(~,~) runMovingCircle());
+        'Callback', @(~,~) runJitteringCircle());
 
     % =====================================================================
     %  Store handles for data sharing between callbacks
@@ -331,8 +374,6 @@ function MasterControlPanel()
 
     % ---- Tab 1: Flicker ----
     function runFlicker()
-        setStatus('Connecting to Stage server...');
-        drawnow;
         try
             hz = str2double(get(flickerHz1, 'String'));
             sf = str2double(get(stimFrames1, 'String'));
@@ -340,17 +381,14 @@ function MasterControlPanel()
             modeIdx = get(flickerModeDD, 'Value');
 
             if modeIdx == 1
-                fprintf('[MCP] Calling AAGreyScaleFullFieldNoiseFinal2026(%g, %d, %d)\n', hz, sf, rr);
-                setStatus('Running greyscale flicker...');
-                drawnow;
-                AAGreyScaleFullFieldNoiseFinal2026(hz, sf, rr);
+                stimFn = @() AAGreyScaleFullFieldNoiseFinal2026(hz, sf, rr);
+                stimName = 'greyscale flicker';
             else
-                fprintf('[MCP] Calling AASConeIsoFullFieldNoiseStimFinal2026(%g, %d, %d)\n', hz, sf, rr);
-                setStatus('Running S-cone iso flicker...');
-                drawnow;
-                AASConeIsoFullFieldNoiseStimFinal2026(hz, sf, rr);
+                stimFn = @() AASConeIsoFullFieldNoiseStimFinal2026(hz, sf, rr);
+                stimName = 'S-cone iso flicker';
             end
-            setStatus('Flicker stimulus complete.');
+
+            runTrialLoop(stimFn, stimName);
         catch err
             setStatus(['ERROR: ' err.message]);
             fprintf(2, '[MCP] Flicker error:\n%s\n', getReport(err, 'extended'));
@@ -359,8 +397,6 @@ function MasterControlPanel()
 
     % ---- Tab 2: Full Field Noise ----
     function runNoise()
-        setStatus('Connecting to Stage server...');
-        drawnow;
         try
             sd = str2double(get(seed2, 'String'));
             m  = str2double(get(mu2, 'String'));
@@ -371,17 +407,14 @@ function MasterControlPanel()
             modeIdx = get(noiseModeDD, 'Value');
 
             if modeIdx == 1
-                fprintf('[MCP] Calling AASeededGaussianGreyScaleStimFinal2026(%d, %.2f, %.2f, %g, %d, %d)\n', sd, m, sg, hz, sf, rr);
-                setStatus('Running greyscale full-field noise...');
-                drawnow;
-                AASeededGaussianGreyScaleStimFinal2026(sd, m, sg, hz, sf, rr);
+                stimFn = @() AASeededGaussianGreyScaleStimFinal2026(sd, m, sg, hz, sf, rr);
+                stimName = 'greyscale full-field noise';
             else
-                fprintf('[MCP] Calling AASeededGaussianSConeIsoStimFinal2026(%d, %.2f, %.2f, %g, %d, %d)\n', sd, m, sg, hz, sf, rr);
-                setStatus('Running S-cone iso full-field noise...');
-                drawnow;
-                AASeededGaussianSConeIsoStimFinal2026(sd, m, sg, hz, sf, rr);
+                stimFn = @() AASeededGaussianSConeIsoStimFinal2026(sd, m, sg, hz, sf, rr);
+                stimName = 'S-cone iso full-field noise';
             end
-            setStatus('Full field noise stimulus complete.');
+
+            runTrialLoop(stimFn, stimName);
         catch err
             setStatus(['ERROR: ' err.message]);
             fprintf(2, '[MCP] Noise error:\n%s\n', getReport(err, 'extended'));
@@ -390,8 +423,6 @@ function MasterControlPanel()
 
     % ---- Tab 3: Checkerboard ----
     function runCheckerboard()
-        setStatus('Connecting to Stage server...');
-        drawnow;
         try
             sd = str2double(get(seed3, 'String'));
             m  = str2double(get(mu3, 'String'));
@@ -401,18 +432,21 @@ function MasterControlPanel()
             rr = str2double(get(refreshRate3, 'String'));
             modeIdx = get(checkerModeDD, 'Value');
 
-            if modeIdx == 1
-                fprintf('[MCP] Calling AASeededGaussianCheckerboardGreyScaleStimFinal(%d, %.2f, %.2f, %d, %d, %d)\n', sd, m, sg, un, sf, rr);
-                setStatus('Running greyscale checkerboard...');
-                drawnow;
-                AASeededGaussianCheckerboardGreyScaleStimFinal(sd, m, sg, un, sf, rr);
-            else
-                fprintf('[MCP] Calling AASeededGaussianCheckerboardSConeIsoStimFinal(%d, %.2f, %.2f, %d, %d, %d)\n', sd, m, sg, un, sf, rr);
-                setStatus('Running S-cone iso checkerboard...');
-                drawnow;
-                AASeededGaussianCheckerboardSConeIsoStimFinal(sd, m, sg, un, sf, rr);
+            % Auto-save noise before stimulus (if enabled)
+            if get(autoSave3, 'Value')
+                setStatus('Auto-saving noise sequence...');
+                saveCheckerboardNoiseForAnalysis(sd, m, sg, 40, 32, sf, un);
             end
-            setStatus('Checkerboard stimulus complete.');
+
+            if modeIdx == 1
+                stimFn = @() AASeededGaussianCheckerboardGreyScaleStimFinal(sd, m, sg, un, sf, rr);
+                stimName = 'greyscale checkerboard';
+            else
+                stimFn = @() AASeededGaussianCheckerboardSConeIsoStimFinal(sd, m, sg, un, sf, rr);
+                stimName = 'S-cone iso checkerboard';
+            end
+
+            runTrialLoop(stimFn, stimName);
         catch err
             setStatus(['ERROR: ' err.message]);
             fprintf(2, '[MCP] Checkerboard error:\n%s\n', getReport(err, 'extended'));
@@ -436,7 +470,7 @@ function MasterControlPanel()
         end
     end
 
-    % ---- Tab 4: Analysis + Moving Circle ----
+    % ---- Tab 4: Analysis + Jittering Circle ----
     function addAbfFiles()
         [files, filePath] = uigetfile('*.abf', 'Select ABF Files', 'MultiSelect', 'on');
         if isequal(files, 0), return; end
@@ -536,7 +570,7 @@ function MasterControlPanel()
         end
     end
 
-    function runMovingCircle()
+    function runJitteringCircle()
         gd = getappdata(fig, 'guiData');
         useSim = get(simModeCheck, 'Value');
 
@@ -564,24 +598,16 @@ function MasterControlPanel()
             return;
         end
 
-        setStatus('Running moving circle stimulus...');
-        drawnow;
         try
             modeItems = get(circleModeDD, 'String');
             mode = modeItems{get(circleModeDD, 'Value')};
-            fprintf('[MCP] Would call MovingCircleStimulus with:\n');
-            fprintf('  RF center: (%.1f, %.1f)\n', rfCx, rfCy);
-            fprintf('  RF radius: %.1f px\n', rfR);
-            fprintf('  Circle radius: %.1f px\n', stimR);
-            fprintf('  Walk speed: %.1f px/s\n', spd);
-            fprintf('  Stim frames: %d\n', sf);
-            fprintf('  Refresh rate: %d Hz\n', rr);
-            fprintf('  Simulation: %d\n', useSim);
-            fprintf('  Color mode: %s\n', mode);
-            setStatus('Moving circle: not yet implemented (Phase 5).');
+            stimFn = @() AAJitteringCircleStimulusFinal([rfCx, rfCy], rfR, stimR, spd, sf, rr, mode);
+            stimName = ['jittering circle (' mode ')'];
+
+            runTrialLoop(stimFn, stimName);
         catch err
             setStatus(['ERROR: ' err.message]);
-            fprintf(2, '[MCP] Moving circle error:\n%s\n', getReport(err, 'extended'));
+            fprintf(2, '[MCP] Jittering circle error:\n%s\n', getReport(err, 'extended'));
         end
     end
 
@@ -600,6 +626,133 @@ function MasterControlPanel()
             error('Could not parse %s from Python output:\n%s', fieldName, txt);
         end
         val = str2double(tokens{1}{1});
+    end
+
+    % ---- Clampex Recording Wrapper ----
+    function runWithRecording(stimFn)
+    % Wraps a stimulus function call with Clampex gap-free recording.
+    % Uses WScript.Shell AppActivate to robustly target Clampex by
+    % window title, then SendKeys Ctrl+Shift+1 to toggle recording.
+    % Clampex must be open and idle (not already recording).
+        preDelay  = str2double(get(preDelayEdit, 'String'));
+        postDelay = str2double(get(postDelayEdit, 'String'));
+
+        NET.addAssembly('System.Windows.Forms');
+
+        % 1. Bring Clampex to foreground (robust: by window title)
+        setStatus('Activating Clampex window...');
+        drawnow;
+        focusClampex();
+        pause(0.3);
+
+        % 2. Start gap-free recording (Ctrl+Shift+1)
+        setStatus('Starting Clampex recording...');
+        drawnow;
+        System.Windows.Forms.SendKeys.SendWait('^+{1}');
+        pause(0.1);
+
+        % 3. Return focus to MATLAB
+        focusMatlab();
+        pause(0.2);
+
+        % 4. Pre-stimulus delay
+        setStatus(sprintf('Pre-stim delay (%.1f s)...', preDelay));
+        drawnow;
+        pause(preDelay);
+
+        % 5. Run the stimulus
+        setStatus('Running stimulus...');
+        drawnow;
+        stimFn();
+
+        % 6. Post-stimulus delay
+        setStatus(sprintf('Post-stim delay (%.1f s)...', postDelay));
+        drawnow;
+        pause(postDelay);
+
+        % 7. Bring Clampex back to foreground
+        setStatus('Stopping Clampex recording...');
+        drawnow;
+        focusClampex();
+        pause(0.3);
+
+        % 8. Stop recording (same toggle: Ctrl+Shift+1)
+        System.Windows.Forms.SendKeys.SendWait('^+{1}');
+        pause(0.1);
+
+        % 9. Return focus to MATLAB
+        focusMatlab();
+        pause(0.2);
+
+        setStatus('Recording saved by Clampex.');
+        fprintf('[MCP] Clampex recording cycle complete.\n');
+    end
+
+    % ---- Trial Loop ----
+    function runTrialLoop(stimFn, stimName)
+    % Runs stimFn for the configured number of trials.
+    % If recording is enabled, each trial is wrapped with Clampex.
+        nTrials = max(1, round(str2double(get(trialsEdit, 'String'))));
+        iti     = str2double(get(itiEdit, 'String'));
+        useRec  = get(recordCheck, 'Value');
+
+        for trial = 1:nTrials
+            setStatus(sprintf('Trial %d/%d: %s...', trial, nTrials, stimName));
+            fprintf('[MCP] === Trial %d/%d: %s ===\n', trial, nTrials, stimName);
+            drawnow;
+
+            if useRec
+                runWithRecording(stimFn);
+            else
+                stimFn();
+            end
+
+            fprintf('[MCP] Trial %d/%d done.\n', trial, nTrials);
+
+            % Inter-trial interval (skip after last trial)
+            if trial < nTrials
+                setStatus(sprintf('ITI (%.1f s) before trial %d...', iti, trial + 1));
+                drawnow;
+                pause(iti);
+            end
+        end
+
+        setStatus(sprintf('All %d trials of %s complete.', nTrials, stimName));
+        fprintf('[MCP] All %d trials complete.\n', nTrials);
+    end
+
+    % ---- Focus Helpers (robust window targeting) ----
+    function focusClampex()
+    % Activates the Clampex window by searching for its title.
+    % Uses WScript.Shell COM object for robust window targeting.
+        try
+            shell = actxserver('WScript.Shell');
+            found = shell.AppActivate('Clampex');
+            if ~found
+                % Fallback: try pCLAMP title variant
+                found = shell.AppActivate('pCLAMP');
+            end
+            if ~found
+                warning('[MCP] Could not find Clampex window. Is it open?');
+            end
+            delete(shell);
+        catch
+            % Last-resort fallback: Alt+Tab
+            NET.addAssembly('System.Windows.Forms');
+            System.Windows.Forms.SendKeys.SendWait('%{TAB}');
+        end
+    end
+
+    function focusMatlab()
+    % Returns focus to the MATLAB window.
+        try
+            shell = actxserver('WScript.Shell');
+            shell.AppActivate('MATLAB');
+            delete(shell);
+        catch
+            NET.addAssembly('System.Windows.Forms');
+            System.Windows.Forms.SendKeys.SendWait('%{TAB}');
+        end
     end
 end
 

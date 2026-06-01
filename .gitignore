@@ -1,0 +1,24 @@
+# MATLAB auto-save files
+*.asv
+
+# Data and results
+data/
+results/
+*.abf
+*.mat
+*.fig
+
+# Packaging artifacts (not source)
+*.zip
+github_setup.bat
+
+# OS and IDE specific
+.DS_Store
+Thumbs.db
+.gemini/
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
